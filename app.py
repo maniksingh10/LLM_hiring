@@ -112,40 +112,40 @@ def process_input(user_text):
     user_text = user_text.strip()
     if not user_text:
         return
+    
+    memory = st.session_state.memory.chat_memory
 
     if user_text.lower() in EXIT_KEYWORDS:
         st.session_state.chat_active = False
-        st.session_state.memory.chat_memory.add_user_message(user_text)
-        st.session_state.memory.chat_memory.add_ai_message(
-            "Thank you for chatting with me. Best Wishes for your career."
-        )
+        memory.add_user_message(user_text)
+        memory.add_ai_message("Thank you for chatting with me. Best Wishes for your career.")
         return
 
-    st.session_state.memory.chat_memory.add_user_message(user_text)
+    memory.add_user_message(user_text)
 
     if st.session_state.collecting_info:
         field_key, _ = FIELDS[st.session_state.current_field]
         is_valid, error_msg = validate_input(field_key, user_text)
         if not is_valid:
-            st.session_state.memory.chat_memory.add_ai_message(error_msg)
+            memory.add_ai_message(error_msg)
             return
 
         # Special AI validation
         if field_key == "tech_stack":
             if not validate_with_prompt(pt.validate_tech_stack_prompt, user_text):
-                st.session_state.memory.chat_memory.add_ai_message(
+                memory.add_ai_message(
                     "❗ This does not appear to be a valid tech stack. Please list technologies, frameworks, or tools you use."
                 )
                 return
         elif field_key == "desired_position":
             if not validate_with_prompt(pt.validate_position_prompt, user_text):
-                st.session_state.memory.chat_memory.add_ai_message(
+                memory.add_ai_message(
                     "❗ This does not appear to be a valid job title. Please enter a correct role (e.g., Software Engineer, Data Analyst)."
                 )
                 return
         elif field_key == "location":
             if not validate_with_prompt(pt.validate_location_prompt, user_text):
-                st.session_state.memory.chat_memory.add_ai_message(
+                memory.add_ai_message(
                     "❗ This does not appear to be a valid location. Please enter a city, region, or country."
                 )
                 return
@@ -154,7 +154,7 @@ def process_input(user_text):
 
         if st.session_state.current_field < len(FIELDS):
             next_question = FIELDS[st.session_state.current_field][1]
-            st.session_state.memory.chat_memory.add_ai_message(next_question)
+            memory.add_ai_message(next_question)
         else:
             st.session_state.collecting_info = False
             tech_stack_text = st.session_state.candidate_info.get("tech_stack", "").strip()
@@ -164,7 +164,7 @@ def process_input(user_text):
                     message = f"🔍 **Here are some technical questions to assess your skills:**\n\n{questions_response.strip()}"
                 else:
                     message = "⚠️ Sorry, I could not generate questions at this time."
-                st.session_state.memory.chat_memory.add_ai_message(message)
+                memory.add_ai_message(message)
 
     elif st.session_state.chat_active:
         formatted_history = st.session_state.memory.load_memory_variables({})["history"]
