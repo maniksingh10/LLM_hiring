@@ -1,7 +1,14 @@
 import streamlit as st
-from langchain_google_genai import GoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.memory import ConversationSummaryBufferMemory
-from langchain.schema import HumanMessage, AIMessage
+from langchain_core.messages import AnyMessage, HumanMessage,AIMessage
+from langchain_community.tools.google_jobs import GoogleJobsQueryRun
+from langchain_community.utilities.google_jobs import GoogleJobsAPIWrapper
+from langgraph.graph.message import add_messages
+from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
+from typing_extensions import TypedDict
+from typing import Annotated
 import os
 import re
 from dotenv import load_dotenv
@@ -14,9 +21,28 @@ load_dotenv()
 if not os.getenv("GOOGLE_API_KEY"):
     st.error("Missing GOOGLE_API_KEY")
     st.stop()
+# tools implement
+jobs_search = GoogleJobsQueryRun(api_wrapper=GoogleJobsAPIWrapper())
+tools =[jobs_search]
 
 # Initialize the LLM
-llm = GoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0.8)
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0.8)
+llm_with_tools = llm.bind_tools(tools)
+
+# Langgraph Implement
+class State(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+
+def tools_call_llm(state):
+    return {"messages":[llm_with_tools.invoke(state["messages"])]}
+
+builder = StateGraph(State)
+builder.add_node("tools_call_llm", tools_call_llm)
+builder.add_node("tools", ToolNode(tools))
+builder.add_edge(START, "tools_call_llm")
+builder.add_conditional_edges("tools_call_llm",tools_condition)
+builder.add_edge("tools","tools_call_llm")
+graph = builder.compile()
 
 # Streamlit page config
 st.set_page_config(page_title="Hiring Assistant")
@@ -86,7 +112,8 @@ def handle_candidate_field(field_key, user_text):
 def generate_tech_questions(tech_stack):
     question_prompt_text = pt.question_prompt.format(tech_stack=tech_stack)
     with st.spinner("Generating technical questions..."):
-        return llm.invoke(question_prompt_text)
+        # Access the content attribute here
+        return llm.invoke(question_prompt_text).content
 
 # Build candidate summary
 def generate_candidate_summary():
@@ -104,7 +131,8 @@ def generate_candidate_summary():
 def validate_with_prompt(prompt_template, value):
     prompt_text = prompt_template.format(value=value)
     result = llm.invoke(prompt_text)
-    return result and result.strip().upper() == "YES"
+    # Access the content attribute here
+    return result and result.content.strip().upper() == "YES"
 
 # Handle user input
 def process_input(user_text):
@@ -159,28 +187,34 @@ def process_input(user_text):
             st.session_state.collecting_info = False
             tech_stack_text = st.session_state.candidate_info.get("tech_stack", "").strip()
             if tech_stack_text:
-                questions_response = generate_tech_questions(tech_stack_text)
-                if questions_response and questions_response.strip():
-                    message = f"🔍 **Here are some technical questions to assess your skills:**\n\n{questions_response.strip()}"
+                questions_response_content = generate_tech_questions(tech_stack_text) # Get the content directly
+                if questions_response_content and questions_response_content.strip():
+                    message = f"🔍 **Here are some technical questions to assess your skills:**\n\n{questions_response_content.strip()}"
                 else:
                     message = "⚠️ Sorry, I could not generate questions at this time."
                 memory.add_ai_message(message)
 
     elif st.session_state.chat_active:
-        formatted_history = st.session_state.memory.load_memory_variables({})["history"]
-        chat_prompt_text = pt.chat_prompt_for_llm.format(
-            history=formatted_history,
-            user_input=user_text,
-        )
+        initial_messages = st.session_state.memory.chat_memory.messages + [HumanMessage(content=user_text)]
+
         with st.spinner("Thinking..."):
-            response = llm.invoke(chat_prompt_text)
-        st.session_state.memory.chat_memory.add_ai_message(response)
+            response_state = graph.invoke({"messages": initial_messages})
+        
+        if response_state and response_state["messages"]:
+            ai_response_message = response_state["messages"][-1]
+
+            st.session_state.memory.chat_memory.add_ai_message(ai_response_message)
+        else:
+            st.session_state.memory.chat_memory.add_ai_message("Sorry, I couldn't generate a response.")
+
 
 # Display chat messages
 for msg in st.session_state.memory.chat_memory.messages:
     role = "user" if isinstance(msg, HumanMessage) else "assistant"
     with st.chat_message(role):
-        st.markdown(msg.content)
+        st.markdown(
+            f"> {msg.content.strip()}"
+        )
 
 # Show candidate summary
 with st.expander("View Candidate Information"):
@@ -198,4 +232,4 @@ else:
     if st.button("🔄 Start New Conversation"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-    st.rerun()
+        st.rerun()

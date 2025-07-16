@@ -2,3 +2,8 @@ streamlit
 langchain
 langchain_google_genai
 python-dotenv
+langchain-core
+langchain-community
+streamlit
+google-search-results
+langgraph
